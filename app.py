@@ -22,11 +22,17 @@ from routes.generate import generate_bp
 from routes.scripts import scripts_bp
 from routes.voices import voices_bp
 from routes.auth_routes import auth_bp
+from routes.video import video_bp
+from routes.assets import assets_bp
+from routes.settings import settings_bp
 
 app.register_blueprint(generate_bp)
 app.register_blueprint(scripts_bp)
 app.register_blueprint(voices_bp)
 app.register_blueprint(auth_bp)
+app.register_blueprint(video_bp)
+app.register_blueprint(assets_bp)
+app.register_blueprint(settings_bp)
 
 # Initialize database
 init_db()

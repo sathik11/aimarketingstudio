@@ -23,12 +23,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py ./
 COPY services/ ./services/
 COPY routes/ ./routes/
+COPY static/ ./static/
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 # Create data and audio directories
-RUN mkdir -p generated_audio data
+RUN mkdir -p generated_audio data static/avatars
 
 EXPOSE 5000
 
