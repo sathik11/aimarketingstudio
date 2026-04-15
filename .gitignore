@@ -1,2 +1,10 @@
 .env
 __pycache__/translate_ssml.cpython-311.pyc
+generated_audio/
+notes.txt
+plan.md
+data/*
+data/tts.db
+generated_audio/*
+generated_video/*
+translate_ssml.py

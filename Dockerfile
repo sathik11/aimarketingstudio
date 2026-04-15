@@ -1,23 +1,37 @@
-# Use the official Python image from the Docker Hub
+# Stage 1: Build React frontend
+FROM node:20-slim AS frontend-build
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python backend
 FROM python:3.11-slim
 
-# Set the working directory in the container
+# Install ffmpeg for audio conversion
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy the requirements file into the container
+# Install Python dependencies
 COPY requirements.txt .
-
-# Install the dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code into the container
-COPY . .
+# Copy backend code
+COPY *.py ./
+COPY services/ ./services/
+COPY routes/ ./routes/
 
-# Expose the port the app runs on
+# Copy built frontend
+COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+
+# Create data and audio directories
+RUN mkdir -p generated_audio data
+
 EXPOSE 5000
 
-# Set environment variables
 ENV FLASK_APP=app.py
 
-# Run the application
 CMD ["flask", "run", "--host=0.0.0.0"]

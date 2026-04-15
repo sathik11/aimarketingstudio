@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+generated_audio/
+data/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.md
+plan.md
+notes.txt

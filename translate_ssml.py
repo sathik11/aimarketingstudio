@@ -1,46 +1,59 @@
 import os  
 from xml.etree import ElementTree as ET
-from openai import AzureOpenAI  
-from azure.core.credentials import AzureKeyCredential
-from azure.ai.inference.models import SystemMessage, UserMessage
+from xml.sax.saxutils import escape
+import re
+from openai import OpenAI
 import azure.cognitiveservices.speech as speechsdk
 from azure.storage.blob import BlobServiceClient
 import uuid
-from azure.ai.inference import ChatCompletionsClient
-from azure.core.credentials import AzureKeyCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 
+
+def normalize_openai_base_url(raw_endpoint):
+    endpoint = (raw_endpoint or "").rstrip("/")
+    if not endpoint:
+        return "https://your-openai-resource.openai.azure.com/openai/v1/"
+    if endpoint.endswith("/openai/v1") or endpoint.endswith("/openai/v1/"):
+        return f"{endpoint.rstrip('/')}/"
+    if ".openai.azure.com" in endpoint and "/openai/" not in endpoint:
+        return f"{endpoint}/openai/v1/"
+    return f"{endpoint}/"
+
+
 load_dotenv()
-endpoint = os.getenv("ENDPOINT_URL", "https://aiservices-eastus-demo.services.ai.azure.com/models")  
-deployment = os.getenv("DEPLOYMENT_NAME", "gpt-4o-20nov24")  
-aikey = os.getenv("AZURE_AI_ENDPOINT_KEY")
+AUDIO_OUTPUT_DIR = os.path.abspath(os.getenv("LOCAL_AUDIO_OUTPUT_DIR", "generated_audio"))
+os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
 
-# Load environment variables from a .env file
+endpoint = normalize_openai_base_url(
+    os.getenv("AZURE_OPENAI_ENDPOINT", os.getenv("ENDPOINT_URL", "https://your-openai-resource.openai.azure.com"))
+)
+deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", os.getenv("DEPLOYMENT_NAME", "gpt-5.4"))
+credential = DefaultAzureCredential()
+ai_token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
 
-client = ChatCompletionsClient(
-    endpoint=endpoint,
-    credential=AzureKeyCredential(aikey),
-) 
+client = OpenAI(
+    base_url=endpoint,
+    api_key=ai_token_provider,
+)
 
 SYSTEM_PROMPT = """
 ## Who you are 
-    You are an AI Taglish Translator who is expert in translating pure english to filipino context. You work for a Bank named "BDO" Full form of it is Banco De Oro.
+    You are an AI Taglish Translator who is expert in translating pure english to filipino context. You work for a Bank named "BDO".
      
  
 ## what you must do \nTranslate incoming text into taglish ie. causual filipino text. 
-        Make sure you add azure text to speech SSML that best fits the state of text.
-        ** You are receiving text only for translation so DO NOT add any additional sentences. 
-  -  SSML markup must follow azure speech to text . voice is \"fil-PH-BlessicaNeural\" & xml:lang is fil-PH\" , 
-  - Tonality must be casual and professional and must reflect bank customer service scenarios. so add SSML attributes accordingly. 
+                Return only the translated taglish text.
+                ** You are receiving text only for translation so DO NOT add any additional sentences or XML/SSML markup. 
+    - Tonality must be casual and professional and must reflect bank customer service scenarios.
   - Always express numbers in english words. if its telephone number return it as every number as english word
     e.g (02) 6321 8000 must be translated as (zero two) six three two one eight zero zero zero.
 
 #  What you carefully consider
    - Text should never have be in tagalog alone . Numbers should always be in english and expressed in words. 
-   - Whenever your user provided text has uppercase BDO - transform it to Banco De Oro
+   - Whenever your user provided text has uppercase BDO - keep it as BDO (pronunciation is handled separately)
    - Translation must always be taglish. You can change the order of sentence to make it grammatically /colloquially correct for taglish, but dont add any additional context or change the meaning of the sentence.
-   - Try to add emphasis/silence/break bookmark attributes wherever appropriate. 
-   - Provide only proper SSML tag result format. 
+    - Provide only the final translated text.
    
 #### Guidance on Azure SSML as per their documentation - This is for your reference: 
     ```\nSome examples of contents that are allowed in each element are described in the following list:
@@ -102,51 +115,129 @@ def process_voice_tag(xml_string):
 
     return speech_tag_string, text_content
 
-def generate_audio_store(speechinput,str_prefix):
-        
-    speech_config = speechsdk.SpeechConfig(subscription=os.getenv("AZURE_SPEECH_KEY"), region=os.getenv("AZURE_SPEECH_REGION"))
 
-    # use the default speaker as audio output.
-    speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
-
-    speech_synthesis_result = speech_synthesizer.speak_ssml_async(speechinput).get()
-    stream = speechsdk.AudioDataStream(speech_synthesis_result)
-    # Save the audio stream to a local file
-    local_file_name = f"{str_prefix}-{uuid.uuid4()}.wav"
-    stream.save_to_wav_file(local_file_name)
-
-    # Upload the file to Azure Blob Storage
-    blob_service_client = BlobServiceClient.from_connection_string(os.getenv("AZURE_STORAGE_CONNECTION_STRING"))
+def upload_audio_to_blob(local_file_path):
+    storage_account_url = os.getenv("AZURE_STORAGE_ACCOUNT_URL")
     container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
-    blob_client = blob_service_client.get_blob_client(container=container_name, blob=local_file_name)
+    if not storage_account_url or not container_name:
+        return None
 
-    with open(local_file_name, "rb") as data:
+    blob_service_client = BlobServiceClient(account_url=storage_account_url, credential=credential)
+    blob_name = os.path.basename(local_file_path)
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+    with open(local_file_path, "rb") as data:
         blob_client.upload_blob(data, overwrite=True)
 
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    blob_url_with_sas = f"{blob_client.url}?{sas_token}"
-    print(f"Blob URL with SAS token: {blob_url_with_sas}")
-    # Delete the local file after upload
-    os.remove(local_file_name)
-    return blob_url_with_sas
+    blob_url = blob_client.url
+    print(f"Blob URL: {blob_url}")
+    return blob_url
+
+def generate_audio_store(speechinput,str_prefix):
+    speech_resource_id = os.getenv("AZURE_SPEECH_RESOURCE_ID")
+    if not speech_resource_id:
+        raise ValueError("Set AZURE_SPEECH_RESOURCE_ID to the Azure resource ID of your Speech or AI Services resource.")
+
+    speech_region = os.getenv("AZURE_SPEECH_REGION")
+    if not speech_region:
+        raise ValueError("Set AZURE_SPEECH_REGION to the Speech resource region, for example swedencentral.")
+
+    speech_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+    speech_auth_token = f"aad#{speech_resource_id}#{speech_token}"
+    speech_config = speechsdk.SpeechConfig(auth_token=speech_auth_token, region=speech_region)
+    speech_config.speech_synthesis_voice_name = os.getenv("AZURE_SPEECH_VOICE", "fil-PH-BlessicaNeural")
+
+    speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+
+    speech_synthesis_result = speech_synthesizer.speak_ssml_async(speechinput).get()
+    local_file_name = f"{str_prefix}-{uuid.uuid4()}.wav"
+    local_file_path = os.path.join(AUDIO_OUTPUT_DIR, local_file_name)
+
+    if speech_synthesis_result.reason == speechsdk.ResultReason.Canceled:
+        cancellation_details = speech_synthesis_result.cancellation_details
+        raise RuntimeError(
+            f"Speech synthesis canceled: {cancellation_details.reason}. "
+            f"Details: {cancellation_details.error_details or 'No additional details provided.'}"
+        )
+
+    if speech_synthesis_result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
+        raise RuntimeError(f"Unexpected speech synthesis result: {speech_synthesis_result.reason}")
+
+    stream = speechsdk.AudioDataStream(speech_synthesis_result)
+    stream.save_to_wav_file(local_file_path)
+
+    storage_url = None
+    storage_error = None
+    try:
+        storage_url = upload_audio_to_blob(local_file_path)
+    except Exception as exc:
+        storage_error = str(exc)
+        print(f"Blob upload failed: {storage_error}")
+
+    return {
+        "local_audio_file": local_file_name,
+        "storage_url": storage_url,
+        "storage_error": storage_error,
+    }
+
+
+def extract_response_text(response):
+    output_text = getattr(response, "output_text", None)
+    if output_text:
+        return output_text
+
+    output = getattr(response, "output", []) or []
+    parts = []
+    for item in output:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def build_ssml(translated_text):
+    escaped_text = escape((translated_text or "").strip())
+    if not escaped_text:
+        raise ValueError("The model returned empty translated text.")
+
+    return (
+        '<speak version="1.0" xml:lang="fil-PH" '
+        'xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts">'
+        '<voice name="fil-PH-BlessicaNeural">'
+        '<mstts:express-as style="customerservice">'
+        f'<prosody rate="0%">{escaped_text}</prosody>'
+        '</mstts:express-as>'
+        '</voice>'
+        '</speak>'
+    )
 
 
 def taglish_translate(usermsg):
+    safe_prefix = re.sub(r"[^a-zA-Z0-9-]", "", (usermsg or "out")[:3]) or "out"
 
-
-    response = client.complete(
-        messages=[
-            SystemMessage(content=SYSTEM_PROMPT),
-            UserMessage(content=usermsg),
+    response = client.responses.create(
+        model=deployment,
+        instructions=SYSTEM_PROMPT,
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": usermsg},
+                ],
+            },
         ],
-        model=deployment
     )
 
-    # print(response.choices[0].message.content)
+    text_output = extract_response_text(response).strip()
+    speech_output = build_ssml(text_output)
+    audio_result = generate_audio_store(speech_output,safe_prefix)
 
-    ai_output = response.choices[0].message.content
-    # print(ai_output)
-    speech_output, text_output = process_voice_tag(ai_output)
-    blob_url_with_sas = generate_audio_store(speech_output,text_output[:3])
-
-    return {"speech_output":blob_url_with_sas, "text_output":text_output}
+    return {
+        "speech_output": audio_result["storage_url"] or audio_result["local_audio_file"],
+        "text_output": text_output,
+        "local_audio_file": audio_result["local_audio_file"],
+        "storage_url": audio_result["storage_url"],
+        "storage_error": audio_result["storage_error"],
+    }

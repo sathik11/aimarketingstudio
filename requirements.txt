@@ -2,14 +2,18 @@
 # The Python Worker is managed by Azure Functions platform
 # Manually managing azure-functions-worker may cause unexpected issues
 
-azure-functions
-azure-cognitiveservices-speech
-azure-ai-inference
-azure-core
-azure-identity
-azure-storage-blob
-openai
-flask
-flask-cors
-requests
-uvicorn
+azure-functions>=1.21.0
+azure-cognitiveservices-speech>=1.48.2
+azure-core>=1.30.0
+azure-identity>=1.17.1
+azure-storage-blob>=12.22.0
+openai>=1.54.0
+flask>=3.0.0
+flask-cors>=4.0.1
+requests>=2.32.0
+uvicorn>=0.30.0
+python-dotenv>=1.0.1
+PyJWT>=2.8.0
+cryptography>=42.0.0
+websockets>=12.0
+pydub>=0.25.1

@@ -1,0 +1,50 @@
+:root {
+  --bdo-navy: #003478;
+  --bdo-gold: #F5A623;
+  --bdo-dark: #00204A;
+  --bdo-blue: #003478;
+  --accent: #0052CC;
+  --accent-light: #E9F2FF;
+  --bg: #F7F8FA;
+  --surface: #FFFFFF;
+  --border: #E2E5EA;
+  --border-light: #F0F1F3;
+  --text: #1A1D23;
+  --text-secondary: #5E6470;
+  --text-muted: #8B90A0;
+  --success: #0D7C3D;
+  --error: #D32029;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color: var(--text);
+  background-color: var(--bg);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body { margin: 0; }
+
+button { font-family: inherit; }
+select { font-family: inherit; }
+textarea { font-family: inherit; }
+input { font-family: inherit; }
+
+::selection {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
