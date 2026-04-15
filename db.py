@@ -142,6 +142,18 @@ def init_db():
         conn.commit()
         logger.info(f"Seeded {len(AVATARS)} built-in avatars")
 
+    # Seed default demo user if no users exist
+    user_count = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+    if user_count["cnt"] == 0:
+        from werkzeug.security import generate_password_hash
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO users (username, password_hash, name, max_iterations, max_videos, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("demo", generate_password_hash("demo123"), "Demo User", 50, 5, now),
+        )
+        conn.commit()
+        logger.info("Seeded default demo user")
+
     conn.close()
     logger.info(f"Database initialized at {DB_PATH}")
 
