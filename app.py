@@ -14,6 +14,7 @@ from db import init_db
 os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder="frontend/dist", static_url_path="")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "bdo-voice-studio-secret-key-2026")
 CORS(app)
 
 # Register blueprints
