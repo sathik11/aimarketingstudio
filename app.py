@@ -10,10 +10,13 @@ load_dotenv()
 
 from config import AUDIO_OUTPUT_DIR
 from db import init_db
+from services.blob_sync import restore_from_blob, upload_db_to_blob
 
 os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
 
-app = Flask(__name__, static_folder="frontend/dist", static_url_path="")
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+
+app = Flask(__name__, static_folder=None)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "bdo-voice-studio-secret-key-2026")
 CORS(app)
 
@@ -34,8 +37,17 @@ app.register_blueprint(video_bp)
 app.register_blueprint(assets_bp)
 app.register_blueprint(settings_bp)
 
-# Initialize database
+# Restore DB and audio from blob storage, then init DB
+restore_from_blob()
 init_db()
+
+
+# Sync DB to blob after every mutating request
+@app.after_request
+def sync_db_after_write(response):
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and response.status_code < 500:
+        upload_db_to_blob()
+    return response
 
 
 # --- Core routes ---
@@ -57,11 +69,11 @@ def serve_audio(filename):
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):
-    if path and os.path.exists(os.path.join(app.static_folder or "", path)):
-        return send_from_directory(app.static_folder, path)
-    index_path = os.path.join(app.static_folder or "", "index.html")
+    if path and os.path.exists(os.path.join(FRONTEND_DIR, path)):
+        return send_from_directory(FRONTEND_DIR, path)
+    index_path = os.path.join(FRONTEND_DIR, "index.html")
     if os.path.exists(index_path):
-        return send_from_directory(app.static_folder, "index.html")
+        return send_from_directory(FRONTEND_DIR, "index.html")
     return jsonify({"status": "ok", "message": "BDO TTS API. Frontend not built yet."}), 200
 
 

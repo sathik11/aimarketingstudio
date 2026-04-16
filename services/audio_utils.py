@@ -85,6 +85,13 @@ def store_and_upload(audio_bytes: bytes, prefix: str = "out", fmt: str = "wav") 
     if fmt == "mp3" and filename.endswith(".wav"):
         filename = convert_wav_to_mp3(filename)
 
+    # Persist to blob for recovery after restarts
+    try:
+        from services.blob_sync import upload_audio_file_to_blob
+        upload_audio_file_to_blob(filename)
+    except Exception:
+        pass
+
     storage_url = None
     storage_error = None
     try:
