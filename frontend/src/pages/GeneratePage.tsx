@@ -43,6 +43,7 @@ const METHODS = [
   { id: "gpt-ssml",     label: "GPT + SSML",    tag: "AI+SSML",  color: "#5B2D90", gradient: "linear-gradient(135deg, #5B2D90, #8661C5)" },
   { id: "gpt-audio",    label: "GPT Audio",     tag: "AI Audio", color: "#0D7C3D", gradient: "linear-gradient(135deg, #0D7C3D, #34B76F)" },
   { id: "gpt-realtime", label: "GPT Realtime",  tag: "Realtime", color: "#C4314B", gradient: "linear-gradient(135deg, #C4314B, #E8627C)" },
+  { id: "mai-voice-1",  label: "MAI Voice 1",   tag: "MAI",      color: "#0E7490", gradient: "linear-gradient(135deg, #0E7490, #06B6D4)" },
 ];
 
 const METHOD_MAP = Object.fromEntries(METHODS.map(m => [m.id, m]));
@@ -168,6 +169,9 @@ export default function GeneratePage({ onGenerated }: { onGenerated?: () => void
         params.instructions = v.instructions || undefined;
         params.temperature = v.temperature;
         params.max_output_tokens = v.maxOutputTokens;
+      }
+      if (v.method === "mai-voice-1") {
+        params.pronunciation = pronunciation;
       }
 
       try {
@@ -570,6 +574,19 @@ function VariantCard({ variant: v, voices: voiceList, formats: fmtList, onChange
           </div>
           <span style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 6, display: "block" }}>
             Requires <strong>gpt-realtime-1.5</strong> deployment. Generates original + AI suggested version.
+          </span>
+        </div>
+      )}
+
+      {/* MAI Voice 1 */}
+      {v.method === "mai-voice-1" && (
+        <div style={{ padding: 10, borderRadius: "var(--radius-sm)", background: "linear-gradient(135deg, #0E749008, #06B6D408)", border: "1px solid #0E749020" }}>
+          <span style={{ fontSize: 11, color: "#0E7490", fontWeight: 600, display: "block", marginBottom: 4 }}>
+            Microsoft MAI-Voice-1 (Preview)
+          </span>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6 }}>
+            Highly expressive neural voice that automatically adapts emotion, pace, and rhythm.
+            Optimized for conversational and engaging speech. <strong>Most suited for English only</strong>
           </span>
         </div>
       )}

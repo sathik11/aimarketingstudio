@@ -4,6 +4,7 @@ __pycache__/
 .env
 .git/
 generated_audio/
+generated_video/
 data/
 node_modules/
 frontend/node_modules/

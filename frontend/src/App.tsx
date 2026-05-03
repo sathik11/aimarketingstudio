@@ -13,7 +13,8 @@ import AssetsPage from "./pages/AssetsPage";
 interface UserInfo {
   id: number; username: string; name: string;
   max_iterations: number; used_iterations: number; iterations_remaining: number;
-  max_videos?: number; used_videos?: number;
+  max_videos?: number; used_videos?: number; videos_remaining?: number;
+  max_images?: number; used_images?: number; images_remaining?: number;
 }
 
 function AppRoutes({ onRefreshUser }: { onRefreshUser: () => void }) {

@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
     used_iterations INTEGER NOT NULL DEFAULT 0,
     max_videos INTEGER NOT NULL DEFAULT 5,
     used_videos INTEGER NOT NULL DEFAULT 0,
+    max_images INTEGER NOT NULL DEFAULT 20,
+    used_images INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
@@ -104,6 +106,8 @@ CREATE TABLE IF NOT EXISTS avatars (
     description TEXT,
     source TEXT NOT NULL DEFAULT 'text',
     model_used TEXT,
+    asset_type TEXT NOT NULL DEFAULT 'character',
+    style TEXT NOT NULL DEFAULT 'pixar-3d',
     landscape_file TEXT,
     portrait_file TEXT,
     created_at TEXT NOT NULL,
@@ -120,10 +124,45 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_db(conn: sqlite3.Connection):
+    """Add columns that may not exist in older databases."""
+    cursor = conn.execute("PRAGMA table_info(users)")
+    user_cols = {row[1] for row in cursor.fetchall()}
+
+    if "max_images" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN max_images INTEGER NOT NULL DEFAULT 20")
+        conn.execute("ALTER TABLE users ADD COLUMN used_images INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+        logger.info("Migrated users table: added image quota columns")
+
+    cursor = conn.execute("PRAGMA table_info(avatars)")
+    avatar_cols = {row[1] for row in cursor.fetchall()}
+
+    if "asset_type" not in avatar_cols:
+        conn.execute("ALTER TABLE avatars ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'character'")
+        conn.commit()
+        logger.info("Migrated avatars table: added asset_type column")
+
+    if "style" not in avatar_cols:
+        conn.execute("ALTER TABLE avatars ADD COLUMN style TEXT NOT NULL DEFAULT 'pixar-3d'")
+        conn.commit()
+        logger.info("Migrated avatars table: added style column")
+
+    if "status" not in avatar_cols:
+        conn.execute("ALTER TABLE avatars ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+        conn.execute("ALTER TABLE avatars ADD COLUMN quality TEXT NOT NULL DEFAULT 'medium'")
+        conn.execute("ALTER TABLE avatars ADD COLUMN error_message TEXT")
+        conn.commit()
+        logger.info("Migrated avatars table: added status/quality/error_message columns")
+
+
 def init_db():
     conn = _get_conn()
     conn.executescript(_SCHEMA)
     conn.commit()
+
+    # Run migrations for existing databases
+    _migrate_db(conn)
 
     # Seed built-in avatars if not present
     existing = conn.execute("SELECT COUNT(*) as cnt FROM avatars WHERE user_id IS NULL").fetchone()
@@ -260,14 +299,14 @@ def record_generation(
 
 # --- Users ---
 
-def create_user(username: str, password: str, name: str, max_iterations: int = 50, max_videos: int = 5) -> dict:
+def create_user(username: str, password: str, name: str, max_iterations: int = 50, max_videos: int = 5, max_images: int = 20) -> dict:
     from werkzeug.security import generate_password_hash
     now = _now()
     conn = _get_conn()
     try:
         cursor = conn.execute(
-            "INSERT INTO users (username, password_hash, name, max_iterations, used_iterations, max_videos, used_videos, active, created_at) VALUES (?, ?, ?, ?, 0, ?, 0, 1, ?)",
-            (username, generate_password_hash(password), name, max_iterations, max_videos, now),
+            "INSERT INTO users (username, password_hash, name, max_iterations, used_iterations, max_videos, used_videos, max_images, used_images, active, created_at) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 0, 1, ?)",
+            (username, generate_password_hash(password), name, max_iterations, max_videos, max_images, now),
         )
         conn.commit()
         user_id = cursor.lastrowid
@@ -275,7 +314,7 @@ def create_user(username: str, password: str, name: str, max_iterations: int = 5
         conn.close()
         raise ValueError(f"Username '{username}' already exists")
     conn.close()
-    return {"id": user_id, "username": username, "name": name, "max_iterations": max_iterations, "max_videos": max_videos}
+    return {"id": user_id, "username": username, "name": name, "max_iterations": max_iterations, "max_videos": max_videos, "max_images": max_images}
 
 
 def verify_user(username: str, password: str) -> dict | None:
@@ -294,7 +333,7 @@ def verify_user(username: str, password: str) -> dict | None:
 
 def get_user_by_id(user_id: int) -> dict | None:
     conn = _get_conn()
-    row = conn.execute("SELECT id, username, name, max_iterations, used_iterations, max_videos, used_videos, active, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    row = conn.execute("SELECT id, username, name, max_iterations, used_iterations, max_videos, used_videos, max_images, used_images, active, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -331,6 +370,48 @@ def increment_user_videos(user_id: int):
     conn.execute("UPDATE users SET used_videos = used_videos + 1 WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+
+def increment_user_images(user_id: int):
+    conn = _get_conn()
+    conn.execute("UPDATE users SET used_images = used_images + 1 WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def check_user_image_quota(user_id: int) -> bool:
+    conn = _get_conn()
+    row = conn.execute("SELECT max_images, used_images FROM users WHERE id = ? AND active = 1", (user_id,)).fetchone()
+    conn.close()
+    if not row:
+        return False
+    return row["used_images"] < row["max_images"]
+
+
+def update_user_quotas(user_id: int, max_iterations: int | None = None, max_videos: int | None = None, max_images: int | None = None) -> dict | None:
+    """Update quota limits for an existing user."""
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    updates = {}
+    if max_iterations is not None:
+        updates["max_iterations"] = max_iterations
+    if max_videos is not None:
+        updates["max_videos"] = max_videos
+    if max_images is not None:
+        updates["max_images"] = max_images
+    if not updates:
+        conn.close()
+        return dict(row)
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [user_id]
+    conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    updated = conn.execute("SELECT id, username, name, max_iterations, used_iterations, max_videos, used_videos, max_images, used_images, active, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(updated) if updated else None
 
 
 # --- Video Jobs ---
@@ -467,17 +548,35 @@ def get_project_scene_files(project_id: int) -> list[str]:
 # --- Avatars ---
 
 def create_avatar(user_id: int | None, name: str, description: str, source: str, model_used: str,
-                  landscape_file: str, portrait_file: str) -> dict:
+                  landscape_file: str, portrait_file: str, asset_type: str = "character", style: str = "pixar-3d",
+                  status: str = "ready", quality: str = "medium") -> dict:
     now = _now()
     conn = _get_conn()
     cursor = conn.execute(
-        "INSERT INTO avatars (user_id, name, description, source, model_used, landscape_file, portrait_file, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (user_id, name, description, source, model_used, landscape_file, portrait_file, now),
+        "INSERT INTO avatars (user_id, name, description, source, model_used, asset_type, style, landscape_file, portrait_file, status, quality, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, name, description, source, model_used, asset_type, style, landscape_file, portrait_file, status, quality, now),
     )
     conn.commit()
     aid = cursor.lastrowid
     conn.close()
-    return {"id": aid, "name": name, "source": source, "created_at": now}
+    return {"id": aid, "name": name, "source": source, "asset_type": asset_type, "style": style, "status": status, "quality": quality, "created_at": now}
+
+
+def update_avatar_status(avatar_id: int, status: str, landscape_file: str | None = None,
+                         portrait_file: str | None = None, error_message: str | None = None) -> None:
+    conn = _get_conn()
+    if landscape_file and portrait_file:
+        conn.execute(
+            "UPDATE avatars SET status = ?, landscape_file = ?, portrait_file = ?, error_message = ? WHERE id = ?",
+            (status, landscape_file, portrait_file, error_message, avatar_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE avatars SET status = ?, error_message = ? WHERE id = ?",
+            (status, error_message, avatar_id),
+        )
+    conn.commit()
+    conn.close()
 
 
 def get_all_avatars(user_id: int | None = None) -> list[dict]:

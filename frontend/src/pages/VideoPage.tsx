@@ -227,6 +227,21 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
     }
   };
 
+  // Remix a completed scene with edited prompt
+  const handleRemixScene = async (sceneId: number, newPrompt: string) => {
+    if (!activeProject) return;
+    try {
+      await api.post(`/api/video/storyboard/${activeProject.id}/remix-scene/${sceneId}`, {
+        prompt: newPrompt,
+      });
+      const { data } = await api.get(`/api/video/storyboard/${activeProject.id}`);
+      setActiveProject(data);
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      setError(axErr?.response?.data?.error || "Remix failed");
+    }
+  };
+
   const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
 
   return (
@@ -239,6 +254,22 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
         <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 14 }}>
           Create AI-generated videos from your marketing scripts using Sora 2.
         </p>
+
+        {/* Content Moderation Warning */}
+        <div style={{
+          padding: "12px 16px", borderRadius: 8, marginBottom: 14,
+          background: "linear-gradient(135deg, #FEF3C7, #FFF7ED)",
+          border: "1px solid #F59E0B40",
+          display: "flex", gap: 10, alignItems: "flex-start",
+        }}>
+          <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+          <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.6 }}>
+            <strong>Content Moderation Notice:</strong> Sora 2 has safety policies that may <strong>reject videos featuring realistic human faces or photorealistic characters</strong>.
+            For reliable results, use <strong>animated, illustrated, or stylized characters</strong> (e.g. Pixar 3D, Anime, Comic Book styles from the Assets page).
+            Hyper-realistic human avatars will likely trigger moderation and cause scene generation to fail.
+          </div>
+        </div>
+
         {/* Mode Toggle */}
         <div style={{ display: "flex", gap: 4, background: "var(--border-light, #f0f0f0)", borderRadius: 8, padding: 3, width: "fit-content" }}>
           {([["storyboard", "Storyboard", "Multi-scene with stitching"], ["quick", "Quick Video", "Single 12s clip"]] as const).map(([id, label, desc]) => (
@@ -477,6 +508,12 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                                 Retry
                               </button>
                             )}
+                            {/* Remix badge on completed */}
+                            {scene.status === "completed" && (
+                              <div style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 4, background: "rgba(99,102,241,0.85)", fontSize: 9, fontWeight: 600, color: "#fff", display: "flex", alignItems: "center", gap: 3, pointerEvents: "none" }}>
+                                <span style={{ fontSize: 11 }}>✏️</span> Remix
+                              </div>
+                            )}
                           </div>
                           <div style={{ padding: "6px 8px" }}>
                             <div style={{ fontSize: 11, fontWeight: 600, color: "#ccc" }}>Scene {scene.scene_number}</div>
@@ -493,7 +530,7 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
 
               {/* Scene Detail */}
               {selectedSceneIdx !== null && activeProject.scenes[selectedSceneIdx] && (
-                <SceneDetailPanel scene={activeProject.scenes[selectedSceneIdx]} editable={activeProject.status === "ready" || activeProject.status === "planning"} onUpdatePrompt={(prompt) => handleUpdateScene(activeProject.scenes[selectedSceneIdx].id, prompt)} onRetry={() => handleRetryScene(activeProject.scenes[selectedSceneIdx].id)} />
+                <SceneDetailPanel scene={activeProject.scenes[selectedSceneIdx]} editable={activeProject.status === "ready" || activeProject.status === "planning"} onUpdatePrompt={(prompt) => handleUpdateScene(activeProject.scenes[selectedSceneIdx].id, prompt)} onRetry={() => handleRetryScene(activeProject.scenes[selectedSceneIdx].id)} onRemix={(prompt) => handleRemixScene(activeProject.scenes[selectedSceneIdx].id, prompt)} />
               )}
 
               {/* Final Video */}
@@ -620,28 +657,40 @@ function JobCard({ job }: { job: VideoJob }) {
 }
 
 
-function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry }: {
-  scene: VideoScene; editable: boolean; onUpdatePrompt: (prompt: string) => void; onRetry?: () => void;
+function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry, onRemix }: {
+  scene: VideoScene; editable: boolean; onUpdatePrompt: (prompt: string) => void; onRetry?: () => void; onRemix?: (prompt: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [remixing, setRemixing] = useState(false);
   const [editPrompt, setEditPrompt] = useState(scene.prompt);
 
   // Sync when scene changes
-  useEffect(() => { setEditPrompt(scene.prompt); setEditing(false); }, [scene.id, scene.prompt]);
+  useEffect(() => { setEditPrompt(scene.prompt); setEditing(false); setRemixing(false); }, [scene.id, scene.prompt]);
+
+  const isCompleted = scene.status === "completed";
+  const canRemix = isCompleted && onRemix;
 
   return (
     <div style={{ padding: "16px 20px", borderTop: "1px solid #2a2a4a", background: "#12121f" }}>
-      <div style={{ display: "grid", gridTemplateColumns: scene.status === "completed" && scene.video_url ? "1fr 1fr" : "1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isCompleted && scene.video_url ? "1fr 1fr" : "1fr", gap: 16 }}>
         {/* Left: Prompt */}
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#A5B4FC" }}>Scene {scene.scene_number} — {scene.description}</span>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span style={{ fontSize: 10, color: "#666" }}>{scene.duration}s</span>
-              {editable && !editing && (
+              {editable && !editing && !remixing && (
                 <button onClick={() => setEditing(true)}
                   style={{ padding: "3px 10px", fontSize: 10, borderRadius: 4, border: "1px solid #444",
                     background: "transparent", color: "#A5B4FC", cursor: "pointer" }}>Edit Prompt</button>
+              )}
+              {canRemix && !remixing && !editing && (
+                <button onClick={() => setRemixing(true)}
+                  style={{ padding: "3px 12px", fontSize: 10, fontWeight: 700, borderRadius: 4, border: "none",
+                    background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "#fff", cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(99,102,241,0.4)", display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: 13 }}>✏️</span> Remix Scene
+                </button>
               )}
             </div>
           </div>
@@ -654,6 +703,25 @@ function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry }: {
                 <button onClick={() => { onUpdatePrompt(editPrompt); setEditing(false); }}
                   style={{ padding: "6px 16px", fontSize: 11, borderRadius: 4, border: "none", background: "#6366F1", color: "#fff", cursor: "pointer" }}>Save</button>
                 <button onClick={() => { setEditPrompt(scene.prompt); setEditing(false); }}
+                  style={{ padding: "6px 16px", fontSize: 11, borderRadius: 4, border: "1px solid #444", background: "transparent", color: "#888", cursor: "pointer" }}>Cancel</button>
+              </div>
+            </div>
+          ) : remixing ? (
+            <div>
+              <div style={{ marginBottom: 6, fontSize: 11, color: "#A78BFA", fontWeight: 600 }}>
+                ✏️ Edit the prompt below, then click Remix to regenerate this scene while keeping its visual style
+              </div>
+              <textarea value={editPrompt} onChange={e => setEditPrompt(e.target.value)} rows={5}
+                style={{ width: "100%", padding: 10, borderRadius: 6, border: "2px solid #6366F1", background: "#1a1a2e",
+                  color: "#ccc", fontSize: 12, resize: "vertical", fontFamily: "'Cascadia Code', monospace", lineHeight: 1.6 }} />
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={() => { onRemix!(editPrompt); setRemixing(false); }}
+                  style={{ padding: "6px 18px", fontSize: 11, fontWeight: 700, borderRadius: 4, border: "none",
+                    background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "#fff", cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(99,102,241,0.4)", display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: 13 }}>🎬</span> Remix
+                </button>
+                <button onClick={() => { setEditPrompt(scene.prompt); setRemixing(false); }}
                   style={{ padding: "6px 16px", fontSize: 11, borderRadius: 4, border: "1px solid #444", background: "transparent", color: "#888", cursor: "pointer" }}>Cancel</button>
               </div>
             </div>
@@ -673,10 +741,15 @@ function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry }: {
               )}
             </div>
           )}
+          {scene.status === "remixing" && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "#A78BFA", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span> Remixing scene...
+            </div>
+          )}
         </div>
 
         {/* Right: Video Preview */}
-        {scene.status === "completed" && scene.video_url && (
+        {isCompleted && scene.video_url && (
           <div>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#4ADE80", marginBottom: 8, display: "block" }}>Preview</span>
             <video controls src={scene.video_url} style={{ width: "100%", borderRadius: 6, background: "#000" }} />

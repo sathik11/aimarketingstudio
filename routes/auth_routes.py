@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, session
 
-from db import verify_user, get_user_by_id, create_user
+from db import verify_user, get_user_by_id, create_user, update_user_quotas
 
 auth_bp = Blueprint("auth_routes", __name__, url_prefix="/api/auth")
 
@@ -28,6 +28,9 @@ def api_login():
         "max_videos": user.get("max_videos", 5),
         "used_videos": user.get("used_videos", 0),
         "videos_remaining": user.get("max_videos", 5) - user.get("used_videos", 0),
+        "max_images": user.get("max_images", 20),
+        "used_images": user.get("used_images", 0),
+        "images_remaining": user.get("max_images", 20) - user.get("used_images", 0),
     }), 200
 
 
@@ -56,6 +59,9 @@ def api_me():
         "max_videos": user.get("max_videos", 5),
         "used_videos": user.get("used_videos", 0),
         "videos_remaining": user.get("max_videos", 5) - user.get("used_videos", 0),
+        "max_images": user.get("max_images", 20),
+        "used_images": user.get("used_images", 0),
+        "images_remaining": user.get("max_images", 20) - user.get("used_images", 0),
     }), 200
 
 
@@ -66,12 +72,31 @@ def api_create_user():
     password = body.get("password") or ""
     name = (body.get("name") or "").strip()
     max_iterations = body.get("max_iterations", 50)
+    max_videos = body.get("max_videos", 5)
+    max_images = body.get("max_images", 20)
 
     if not username or not password or not name:
         return jsonify({"error": "username, password, and name required"}), 400
 
     try:
-        user = create_user(username, password, name, max_iterations)
+        user = create_user(username, password, name, max_iterations, max_videos, max_images)
         return jsonify(user), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
+
+
+@auth_bp.route("/update-user/<int:user_id>", methods=["PUT"])
+def api_update_user(user_id: int):
+    """Update quota limits for an existing user."""
+    body = request.get_json(silent=True) or {}
+    max_iterations = body.get("max_iterations")
+    max_videos = body.get("max_videos")
+    max_images = body.get("max_images")
+
+    if max_iterations is None and max_videos is None and max_images is None:
+        return jsonify({"error": "Provide at least one of: max_iterations, max_videos, max_images"}), 400
+
+    user = update_user_quotas(user_id, max_iterations=max_iterations, max_videos=max_videos, max_images=max_images)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(user), 200

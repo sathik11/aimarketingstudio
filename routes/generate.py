@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, url_for
 
 from auth import require_auth, require_quota
 from db import record_generation
-from services import azure_tts, gpt_ssml, gpt_audio, gpt_realtime
+from services import azure_tts, gpt_ssml, gpt_audio, gpt_realtime, mai_voice
 
 logger = logging.getLogger(__name__)
 
@@ -132,15 +132,39 @@ def api_ssml_playground():
 
     try:
         audio_bytes = azure_tts.synthesize(ssml)
-        from services.audio_utils import store_and_upload
-        result = store_and_upload(audio_bytes, "ssml", "wav")
-        result["method"] = "ssml-playground"
-        result["ssml"] = ssml
+        from services.audio_utils import save_audio_file
+        filename = save_audio_file(audio_bytes, "ssml", "wav")
+        result = {"local_audio_file": filename, "method": "ssml-playground", "ssml": ssml}
     except Exception as e:
         logger.exception("ssml-playground synthesis failed")
         return jsonify({"error": str(e)}), 500
 
     _enrich_audio_url(result)
+    return jsonify(result), 200
+
+
+@generate_bp.route("/mai-voice-1", methods=["POST"])
+@require_auth
+@require_quota
+def api_mai_voice_1():
+    body = request.get_json(silent=True) or {}
+    text = body.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+
+    try:
+        result = mai_voice.generate(
+            text=text,
+            voice=body.get("voice", "en-us-Jasper:MAI-Voice-1"),
+            fmt=body.get("format", "wav"),
+            custom_subs=body.get("pronunciation"),
+        )
+    except Exception as e:
+        logger.exception("mai-voice-1 generation failed")
+        return jsonify({"error": str(e)}), 500
+
+    _enrich_audio_url(result)
+    _record(result, body)
     return jsonify(result), 200
 
 
@@ -170,6 +194,11 @@ def _record(result: dict, body: dict):
             text_output=result.get("text_output"),
             script_id=body.get("script_id"),
         )
+        # Cleanup old audio blobs beyond retention limit
+        script_id = body.get("script_id")
+        if script_id:
+            from services.blob_sync import cleanup_old_audio_blobs
+            cleanup_old_audio_blobs(script_id)
     except Exception:
         logger.warning("Failed to record generation", exc_info=True)
 

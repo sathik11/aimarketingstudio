@@ -26,7 +26,10 @@ def api_video_config():
 
 @video_bp.route("/avatar/<path:filename>", methods=["GET"])
 def api_avatar_image(filename: str):
-    """Serve avatar images."""
+    """Serve avatar images (on-demand download from blob)."""
+    from services.blob_sync import download_avatar_file_on_demand
+    if not download_avatar_file_on_demand(filename):
+        return jsonify({"error": "Avatar file not found"}), 404
     return send_from_directory("static/avatars", filename, mimetype="image/png")
 
 
@@ -128,6 +131,9 @@ def api_video_job_status(job_id: int):
 @video_bp.route("/file/<path:filename>", methods=["GET"])
 @require_auth
 def api_video_file(filename: str):
+    from services.blob_sync import download_video_file_on_demand
+    if not download_video_file_on_demand(filename):
+        return jsonify({"error": "Video file not found"}), 404
     return send_from_directory(VIDEO_OUTPUT_DIR, filename, mimetype="video/mp4")
 
 
@@ -286,6 +292,37 @@ def api_storyboard_retry_scene(project_id: int, scene_id: int):
     retry_scene(project_id, scene_id, user_id, project["resolution"], ref_image_path)
 
     return jsonify({"status": "retrying", "scene_id": scene_id}), 202
+
+
+@video_bp.route("/storyboard/<int:project_id>/remix-scene/<int:scene_id>", methods=["POST"])
+@require_auth
+def api_storyboard_remix_scene(project_id: int, scene_id: int):
+    """Remix a completed scene with an edited prompt using the Sora edit API."""
+    user_id = session.get("user_id")
+    project = get_video_project(project_id)
+    if not project or project["user_id"] != user_id:
+        return jsonify({"error": "Not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    new_prompt = (body.get("prompt") or "").strip()
+    if not new_prompt:
+        return jsonify({"error": "prompt is required"}), 400
+
+    scene = None
+    for s in project.get("scenes", []):
+        if s["id"] == scene_id:
+            scene = s
+            break
+    if not scene:
+        return jsonify({"error": "Scene not found"}), 404
+
+    if scene["status"] not in ("completed", "failed"):
+        return jsonify({"error": "Scene must be completed or failed to remix"}), 400
+
+    from services.sora_video import remix_scene
+    remix_scene(project_id, scene_id, new_prompt)
+
+    return jsonify({"status": "remixing", "scene_id": scene_id}), 202
 
 
 @video_bp.route("/storyboard/<int:project_id>", methods=["GET"])

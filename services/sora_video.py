@@ -20,6 +20,15 @@ os.makedirs(VIDEO_OUTPUT_DIR, exist_ok=True)
 _client = None
 
 
+def _upload_video(filename: str):
+    """Upload video to blob in background. Non-blocking."""
+    try:
+        from services.blob_sync import upload_video_file_to_blob
+        upload_video_file_to_blob(filename)
+    except Exception:
+        pass
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
@@ -124,6 +133,7 @@ def submit_video_job(
 
                     update_video_job(job_id, status="completed", progress=100, video_file=filename)
                     increment_user_videos(user_id)
+                    _upload_video(filename)
                     logger.info(f"Video job {job_id} completed: {filename}")
                     break
 
@@ -284,6 +294,7 @@ def submit_storyboard(project_id: int, user_id: int, resolution: str, reference_
                             content = client.videos.download_content(video.id, variant="video")
                             content.write_to_file(filepath)
                             update_video_scene(scene_id, status="completed", progress=100, video_file=filename)
+                            _upload_video(filename)
 
                             # Update project progress
                             done = count_completed_scenes(project_id)
@@ -334,6 +345,7 @@ def submit_storyboard(project_id: int, user_id: int, resolution: str, reference_
 
             update_video_project(project_id, status="completed", final_video_file=final_filename)
             increment_user_videos(user_id)
+            _upload_video(final_filename)
             logger.info(f"Storyboard project {project_id} completed: {final_filename}")
 
         except Exception as exc:
@@ -433,6 +445,7 @@ def retry_scene(project_id: int, scene_id: int, user_id: int, resolution: str, r
                     content = client.videos.download_content(video.id, variant="video")
                     content.write_to_file(filepath)
                     update_video_scene(scene_id, status="completed", progress=100, video_file=filename)
+                    _upload_video(filename)
 
                     done = count_completed_scenes(project_id)
                     total = project["total_scenes"]
@@ -445,6 +458,7 @@ def retry_scene(project_id: int, scene_id: int, user_id: int, resolution: str, r
                         final_filename = f"project-{project_id}-final.mp4"
                         _stitch_videos(scene_files, final_filename)
                         update_video_project(project_id, status="completed", final_video_file=final_filename)
+                        _upload_video(final_filename)
                         logger.info(f"Restitch completed for project {project_id}")
                     break
 
@@ -457,6 +471,93 @@ def retry_scene(project_id: int, scene_id: int, user_id: int, resolution: str, r
 
         except Exception as exc:
             logger.exception(f"Scene retry {scene_id} error")
+            update_video_scene(scene_id, status="failed", error=str(exc))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+
+def remix_scene(project_id: int, scene_id: int, new_prompt: str):
+    """Edit/remix a completed scene using the Sora edit API, then restitch."""
+
+    def _run():
+        try:
+            from db import (
+                get_video_project, update_video_scene, update_video_project,
+                count_completed_scenes, get_project_scene_files,
+            )
+
+            project = get_video_project(project_id)
+            if not project:
+                return
+
+            scene = None
+            for s in project["scenes"]:
+                if s["id"] == scene_id:
+                    scene = s
+                    break
+            if not scene:
+                return
+
+            source_video_id = scene.get("sora_video_id")
+            if not source_video_id:
+                logger.warning(f"Remix scene {scene_id}: no source sora_video_id, falling back to create")
+
+            client = _get_client()
+            update_video_scene(scene_id, status="remixing", prompt=new_prompt, error="")
+
+            if source_video_id:
+                # Use edit API — takes existing video as base
+                video = client.videos.edit(prompt=new_prompt, video={"id": source_video_id})
+            else:
+                # Fallback to create from scratch
+                video = client.videos.create(
+                    model=AZURE_OPENAI_SORA_DEPLOYMENT,
+                    prompt=new_prompt,
+                    size=project["resolution"],
+                    seconds=scene.get("duration", 12),
+                )
+
+            update_video_scene(scene_id, status="queued", sora_video_id=video.id)
+
+            while True:
+                time.sleep(15)
+                video = client.videos.retrieve(video.id)
+                status = video.status
+                progress = getattr(video, "progress", 0) or 0
+
+                if status == "completed":
+                    filename = f"scene-{project_id}-{scene['scene_number']}.mp4"
+                    filepath = os.path.join(VIDEO_OUTPUT_DIR, filename)
+                    content = client.videos.download_content(video.id, variant="video")
+                    content.write_to_file(filepath)
+                    update_video_scene(scene_id, status="completed", progress=100, video_file=filename)
+                    _upload_video(filename)
+
+                    done = count_completed_scenes(project_id)
+                    total = project["total_scenes"]
+                    update_video_project(project_id, completed_scenes=done)
+
+                    # Restitch if all scenes are complete
+                    if done == total:
+                        update_video_project(project_id, status="stitching")
+                        scene_files = get_project_scene_files(project_id)
+                        final_filename = f"project-{project_id}-final.mp4"
+                        _stitch_videos(scene_files, final_filename)
+                        update_video_project(project_id, status="completed", final_video_file=final_filename)
+                        _upload_video(final_filename)
+                        logger.info(f"Remix restitch completed for project {project_id}")
+                    break
+
+                elif status in ("failed", "cancelled"):
+                    err = str(getattr(video, "error", "")) or f"Remix {status}"
+                    update_video_scene(scene_id, status="failed", error=err)
+                    break
+                else:
+                    update_video_scene(scene_id, status=status, progress=progress)
+
+        except Exception as exc:
+            logger.exception(f"Remix scene {scene_id} error")
             update_video_scene(scene_id, status="failed", error=str(exc))
 
     thread = threading.Thread(target=_run, daemon=True)

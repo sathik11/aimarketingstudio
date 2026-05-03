@@ -1,6 +1,8 @@
 import os
 import logging
 import mimetypes
+import signal
+import atexit
 
 from flask import Flask, request, jsonify, send_from_directory, url_for
 from flask_cors import CORS
@@ -10,7 +12,7 @@ load_dotenv()
 
 from config import AUDIO_OUTPUT_DIR
 from db import init_db
-from services.blob_sync import restore_from_blob, upload_db_to_blob
+from services.blob_sync import restore_from_blob, upload_db_to_blob, force_upload_db_to_blob
 
 os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
 
@@ -19,6 +21,8 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fronten
 app = Flask(__name__, static_folder=None)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "bdo-voice-studio-secret-key-2026")
 CORS(app)
+
+logger = logging.getLogger(__name__)
 
 # Register blueprints
 from routes.generate import generate_bp
@@ -42,6 +46,15 @@ restore_from_blob()
 init_db()
 
 
+# Ensure DB is synced to blob on graceful shutdown
+def _shutdown_sync(*args):
+    logger.info("Shutdown: force-syncing DB to blob storage...")
+    force_upload_db_to_blob()
+
+atexit.register(_shutdown_sync)
+signal.signal(signal.SIGTERM, lambda sig, frame: (_shutdown_sync(), exit(0)))
+
+
 # Sync DB to blob after every mutating request
 @app.after_request
 def sync_db_after_write(response):
@@ -59,7 +72,10 @@ def health():
 
 @app.route('/audio/<path:filename>', methods=['GET'])
 def serve_audio(filename):
-    # Determine mimetype from extension
+    # On-demand download from blob if not local
+    from services.blob_sync import download_audio_file_on_demand
+    if not download_audio_file_on_demand(filename):
+        return jsonify({"error": "Audio file not found"}), 404
     mt, _ = mimetypes.guess_type(filename)
     return send_from_directory(AUDIO_OUTPUT_DIR, filename, mimetype=mt or "audio/wav")
 
@@ -69,8 +85,10 @@ def serve_audio(filename):
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):
-    if path and os.path.exists(os.path.join(FRONTEND_DIR, path)):
-        return send_from_directory(FRONTEND_DIR, path)
+    if path:
+        full = os.path.join(FRONTEND_DIR, path)
+        if os.path.isfile(full):
+            return send_from_directory(FRONTEND_DIR, path)
     index_path = os.path.join(FRONTEND_DIR, "index.html")
     if os.path.exists(index_path):
         return send_from_directory(FRONTEND_DIR, "index.html")

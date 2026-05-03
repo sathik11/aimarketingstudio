@@ -1,8 +1,24 @@
 import { Link, useLocation } from "react-router-dom";
 
-export default function NavBar({ user, onLogout }: { user: { name: string; iterations_remaining: number; max_iterations: number }; onLogout: () => void }) {
+interface UserQuotas {
+  name: string;
+  iterations_remaining: number;
+  max_iterations: number;
+  videos_remaining?: number;
+  max_videos?: number;
+  images_remaining?: number;
+  max_images?: number;
+}
+
+export default function NavBar({ user, onLogout }: { user: UserQuotas; onLogout: () => void }) {
   const location = useLocation();
   const isActive = (path: string) => location.pathname === path;
+
+  const voiceLeft = user.iterations_remaining;
+  const videoLeft = user.videos_remaining ?? 0;
+  const videoMax = user.max_videos ?? 5;
+  const imageLeft = user.images_remaining ?? 0;
+  const imageMax = user.max_images ?? 20;
 
   return (
     <nav style={{
@@ -12,7 +28,7 @@ export default function NavBar({ user, onLogout }: { user: { name: string; itera
       boxShadow: "0 2px 12px rgba(0,20,60,0.3)",
     }}>
       {/* Left: BDO Logo + Title */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <Link to="/generate" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none" }}>
         {/* BDO Logo — navy bg with white BD and gold O */}
         <div style={{ display: "flex", alignItems: "baseline", gap: 0, fontFamily: "'Inter', Arial, sans-serif", fontWeight: 800, fontSize: 26, letterSpacing: -1, lineHeight: 1 }}>
           <span style={{ color: "#fff" }}>BD</span>
@@ -22,7 +38,7 @@ export default function NavBar({ user, onLogout }: { user: { name: string; itera
         <span style={{ fontWeight: 600, fontSize: 15, color: "#fff", letterSpacing: -0.2 }}>
           Media Studio
         </span>
-      </div>
+      </Link>
 
       {/* Center: Nav Links */}
       <div style={{ display: "flex", gap: 2 }}>
@@ -53,14 +69,12 @@ export default function NavBar({ user, onLogout }: { user: { name: string; itera
         ))}
       </div>
 
-      {/* Right: User info + iterations */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <div style={{
-          padding: "3px 10px", borderRadius: 12,
-          background: user.iterations_remaining > 10 ? "rgba(255,255,255,0.15)" : user.iterations_remaining > 0 ? "rgba(245,166,35,0.3)" : "rgba(220,50,50,0.3)",
-          fontSize: 11, fontWeight: 600, color: "#fff",
-        }}>
-          {user.iterations_remaining} / {user.max_iterations} left
+      {/* Right: User info + quotas */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <QuotaBadge label="Voice" remaining={voiceLeft} max={user.max_iterations} />
+          <QuotaBadge label="Video" remaining={videoLeft} max={videoMax} />
+          <QuotaBadge label="Image" remaining={imageLeft} max={imageMax} />
         </div>
         <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }}>{user.name}</span>
         <button onClick={onLogout} style={{
@@ -69,5 +83,21 @@ export default function NavBar({ user, onLogout }: { user: { name: string; itera
         }}>Logout</button>
       </div>
     </nav>
+  );
+}
+
+function QuotaBadge({ label, remaining, max }: { label: string; remaining: number; max: number }) {
+  const bg = remaining > Math.ceil(max * 0.2)
+    ? "rgba(255,255,255,0.15)"
+    : remaining > 0
+      ? "rgba(245,166,35,0.3)"
+      : "rgba(220,50,50,0.3)";
+  return (
+    <div style={{
+      padding: "3px 8px", borderRadius: 12, background: bg,
+      fontSize: 10, fontWeight: 600, color: "#fff", whiteSpace: "nowrap",
+    }}>
+      {label}: {remaining}/{max}
+    </div>
   );
 }

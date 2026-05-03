@@ -12,6 +12,10 @@ DB_PATH = os.path.join(DATA_DIR, "tts.db")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", os.getenv("ENDPOINT_URL", ""))
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", os.getenv("DEPLOYMENT_NAME", "gpt-5.4"))
 
+# --- Azure OpenAI Image (gpt-image-2 in eastus2) ---
+AZURE_OPENAI_IMAGE_ENDPOINT = os.getenv("AZURE_OPENAI_IMAGE_ENDPOINT", "https://aoai-eastus2-service.services.ai.azure.com/openai/v1")
+AZURE_OPENAI_IMAGE_DEPLOYMENT = os.getenv("AZURE_OPENAI_IMAGE_DEPLOYMENT", "gpt-image-2")
+
 # --- Azure OpenAI Audio (for gpt-audio-1.5 chat completions) ---
 AZURE_OPENAI_AUDIO_DEPLOYMENT = os.getenv("AZURE_OPENAI_AUDIO_DEPLOYMENT", "gpt-audio-1.5")
 AZURE_OPENAI_AUDIO_API_VERSION = os.getenv("AZURE_OPENAI_AUDIO_API_VERSION", "2025-01-01-preview")
@@ -23,6 +27,10 @@ AZURE_OPENAI_REALTIME_DEPLOYMENT = os.getenv("AZURE_OPENAI_REALTIME_DEPLOYMENT",
 AZURE_SPEECH_RESOURCE_ID = os.getenv("AZURE_SPEECH_RESOURCE_ID", "")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "")
 AZURE_SPEECH_VOICE = os.getenv("AZURE_SPEECH_VOICE", "fil-PH-BlessicaNeural")
+
+# --- Azure Speech MAI-Voice-1 (North Central US) ---
+AZURE_SPEECH_MAI_RESOURCE_ID = os.getenv("AZURE_SPEECH_MAI_RESOURCE_ID", "")
+AZURE_SPEECH_MAI_REGION = os.getenv("AZURE_SPEECH_MAI_REGION", "northcentralus")
 
 # --- Azure Storage ---
 AZURE_STORAGE_ACCOUNT_URL = os.getenv("AZURE_STORAGE_ACCOUNT_URL", "")
@@ -74,6 +82,16 @@ VOICES = {
         {"id": "coral", "name": "Coral", "gender": "Female"},
         {"id": "sage", "name": "Sage", "gender": "Female"},
         {"id": "shimmer", "name": "Shimmer", "gender": "Female"},
+    ],
+    "mai-voice-1": [
+        # Male voices
+        {"id": "en-us-Jasper:MAI-Voice-1", "name": "Jasper (Sales & Conversation)", "locale": "en-US", "gender": "Male"},
+        {"id": "en-us-Grant:MAI-Voice-1", "name": "Grant (Professional)", "locale": "en-US", "gender": "Male"},
+        {"id": "en-us-Reed:MAI-Voice-1", "name": "Reed (Conversational)", "locale": "en-US", "gender": "Male"},
+        # Female voices
+        {"id": "en-us-June:MAI-Voice-1", "name": "June (Customer Service)", "locale": "en-US", "gender": "Female"},
+        {"id": "en-us-Iris:MAI-Voice-1", "name": "Iris (Narration)", "locale": "en-US", "gender": "Female"},
+        {"id": "en-us-Joy:MAI-Voice-1", "name": "Joy (Conversational)", "locale": "en-US", "gender": "Female"},
     ],
 }
 
@@ -181,7 +199,26 @@ AUDIO_FORMATS = {
     "gpt-ssml": ["wav", "mp3"],
     "gpt-audio": ["wav", "mp3", "flac", "opus", "pcm16", "aac"],
     "gpt-realtime": ["pcm16"],
+    "mai-voice-1": ["wav", "mp3"],
 }
+
+# --- Asset Generation Styles ---
+ASSET_STYLES = [
+    {"id": "pixar-3d", "label": "Pixar 3D Animation", "description": "Colorful 3D animated style, great for explainer videos"},
+    {"id": "hyper-realistic", "label": "Hyper-Realistic Portrait", "description": "Photorealistic human face — note: may trigger Sora content moderation"},
+    {"id": "anime", "label": "Anime / Manga", "description": "Japanese anime-style character art"},
+    {"id": "watercolor", "label": "Watercolor Illustration", "description": "Soft hand-painted watercolor look"},
+    {"id": "flat-vector", "label": "Flat / Vector", "description": "Clean flat design, ideal for corporate graphics"},
+    {"id": "comic-book", "label": "Comic Book", "description": "Bold outlines and dynamic comic art style"},
+    {"id": "corporate", "label": "Corporate Professional", "description": "Polished business-appropriate style"},
+]
+
+ASSET_TYPES = [
+    {"id": "character", "label": "Character / Avatar", "description": "A person or character for videos"},
+    {"id": "background", "label": "Background / Scene", "description": "A setting or environment"},
+    {"id": "prop", "label": "Prop / Object", "description": "An item, device, or object"},
+    {"id": "logo-icon", "label": "Logo / Icon", "description": "A brand mark or icon element"},
+]
 
 # --- Sora 2 Video Generation ---
 AZURE_OPENAI_SORA_DEPLOYMENT = os.getenv("AZURE_OPENAI_SORA_DEPLOYMENT", "sora-2")
