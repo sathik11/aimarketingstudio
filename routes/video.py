@@ -11,7 +11,10 @@ from db import (
     get_user_video_projects, update_video_project,
 )
 from config import VIDEO_OUTPUT_DIR, VIDEO_STYLES, VIDEO_RESOLUTIONS, AVATARS
-from services.sora_video import generate_video_prompt, submit_video_job, split_script_into_scenes, submit_storyboard
+from services.sora_video import (
+    generate_video_prompt, submit_video_job, submit_storyboard,
+    plan_storyboard, ALLOWED_SCENE_DURATIONS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +145,11 @@ def api_video_file(filename: str):
 @video_bp.route("/storyboard/plan", methods=["POST"])
 @require_auth
 def api_storyboard_plan():
-    """Split a script into scenes using GPT. Returns scene plan for review."""
+    """Run the director -> scene planner -> shot planner pipeline.
+
+    Returns a project with scenes, director brief, and per-scene reference asset
+    suggestions. The user can then edit prompts/durations/assets before generating.
+    """
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not authenticated"}), 401
@@ -156,20 +163,32 @@ def api_storyboard_plan():
     camera_style = body.get("camera_style", "slow-pan")
     color_mood = body.get("color_mood", "warm")
     nationality = body.get("nationality", "filipino")
+    chain_frames = bool(body.get("chain_frames", False))
 
     if not script:
         return jsonify({"error": "script is required"}), 400
 
-    # Resolve avatar for character consistency
-    avatar = None
+    # Resolve project-level avatar (used as the "main character" hint to the director)
     avatar_description = None
     if avatar_id and style == "animation":
         from db import get_avatar
-        avatar = get_avatar(int(avatar_id))
-        if avatar:
-            avatar_description = avatar.get("description", "")
+        av = get_avatar(int(avatar_id))
+        if av:
+            avatar_description = av.get("description", "")
 
-    # Build cohesion hints
+    # Build the asset bank the scene planner can pick from (current user + built-ins)
+    from db import get_all_avatars
+    available_assets = []
+    for a in get_all_avatars(user_id):
+        if a.get("status", "ready") != "ready":
+            continue
+        available_assets.append({
+            "id": a["id"],
+            "name": a["name"],
+            "asset_type": a.get("asset_type", "character"),
+            "description": a.get("description", ""),
+        })
+
     cohesion = {
         "no_text_overlay": no_text_overlay,
         "camera_style": camera_style,
@@ -178,13 +197,18 @@ def api_storyboard_plan():
     }
 
     try:
-        scenes = split_script_into_scenes(
+        plan = plan_storyboard(
             script, style,
-            avatar_description=avatar_description,
             cohesion=cohesion,
+            avatar_description=avatar_description,
+            available_assets=available_assets,
         )
-        project = create_video_project(user_id, script, style, resolution)
-        add_project_scenes(project["id"], scenes)
+        project = create_video_project(
+            user_id, script, style, resolution,
+            director_brief=plan["director_brief"],
+            chain_frames=chain_frames,
+        )
+        add_project_scenes(project["id"], plan["scenes"])
 
         full_project = get_video_project(project["id"])
         full_project["avatar_id"] = avatar_id
@@ -194,31 +218,59 @@ def api_storyboard_plan():
         return jsonify({"error": str(e)}), 500
 
 
+@video_bp.route("/storyboard/<int:project_id>", methods=["PUT"])
+@require_auth
+def api_storyboard_update_project(project_id: int):
+    """Update project-level settings (currently: chain_frames toggle)."""
+    user_id = session.get("user_id")
+    project = get_video_project(project_id)
+    if not project or project["user_id"] != user_id:
+        return jsonify({"error": "Not found"}), 404
+    if project["status"] not in ("ready", "planning", "failed"):
+        return jsonify({"error": f"Cannot update project in status: {project['status']}"}), 400
+
+    body = request.get_json(silent=True) or {}
+    updates = {}
+    if "chain_frames" in body:
+        updates["chain_frames"] = 1 if body["chain_frames"] else 0
+    if updates:
+        update_video_project(project_id, **updates)
+    return jsonify({"ok": True}), 200
+
+
 @video_bp.route("/storyboard/<int:project_id>/update-scene", methods=["PUT"])
 @require_auth
 def api_storyboard_update_scene(project_id: int):
-    """Edit a scene prompt before generating."""
+    """Edit a scene's prompt, description, duration, or assigned reference asset."""
     project = get_video_project(project_id)
     if not project or project["user_id"] != session.get("user_id"):
         return jsonify({"error": "Not found"}), 404
 
     body = request.get_json(silent=True) or {}
     scene_id = body.get("scene_id")
-    prompt = body.get("prompt")
-    description = body.get("description")
-    duration = body.get("duration")
-
     if not scene_id:
         return jsonify({"error": "scene_id required"}), 400
 
     from db import update_video_scene
     updates = {}
-    if prompt is not None:
-        updates["prompt"] = prompt
-    if description is not None:
-        updates["description"] = description
-    if duration is not None and duration in (4, 8, 12):
-        updates["duration"] = duration
+    if "prompt" in body and body["prompt"] is not None:
+        updates["prompt"] = body["prompt"]
+    if "description" in body and body["description"] is not None:
+        updates["description"] = body["description"]
+    if "duration" in body and body["duration"] is not None:
+        if body["duration"] in ALLOWED_SCENE_DURATIONS:
+            updates["duration"] = body["duration"]
+    if "reference_asset_id" in body:
+        # null clears it
+        ref = body["reference_asset_id"]
+        updates["reference_asset_id"] = int(ref) if ref else None
+    if "camera_style" in body:
+        # null/"" clears it (scene inherits project default)
+        cs = body["camera_style"]
+        if cs in (None, ""):
+            updates["camera_style"] = None
+        elif cs in ("static", "slow-pan", "dolly", "orbit", "handheld"):
+            updates["camera_style"] = cs
 
     if updates:
         update_video_scene(scene_id, **updates)

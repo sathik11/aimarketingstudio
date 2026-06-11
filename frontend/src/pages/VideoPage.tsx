@@ -13,13 +13,20 @@ interface VideoScene {
   id: number; scene_number: number; description: string; prompt: string;
   duration: number; status: string; progress: number;
   video_file?: string; video_url?: string; error?: string;
+  reference_asset_id?: number | null;
+  previous_frame_file?: string | null;
+  camera_style?: string | null;
 }
 interface VideoProject {
   id: number; status: string; script: string; style: string; resolution: string;
   total_scenes: number; completed_scenes: number;
   final_video_file?: string; final_video_url?: string;
+  director_brief?: string | null;
+  chain_frames?: number | boolean;
   error?: string; scenes: VideoScene[]; created_at: string;
 }
+
+const SCENE_DURATIONS = [4, 8, 12] as const;
 
 const STYLE_COLORS: Record<string, string> = {
   animation: "#F59E0B", cinematic: "#6366F1", "motion-graphics": "#0EA5E9", illustration: "#EC4899",
@@ -63,6 +70,8 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
   const [cameraStyle, setCameraStyle] = useState("slow-pan");
   const [colorMood, setColorMood] = useState("warm");
   const [nationality, setNationality] = useState("filipino");
+  const [chainFrames, setChainFrames] = useState(false);
+  const [briefExpanded, setBriefExpanded] = useState(true);
 
   // Load config
   useEffect(() => {
@@ -136,14 +145,33 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
         camera_style: cameraStyle,
         color_mood: colorMood,
         nationality,
+        chain_frames: chainFrames,
       });
       setActiveProject(data);
+      setChainFrames(!!data.chain_frames);
       loadProjects();
     } catch (err: unknown) {
       const axErr = err as { response?: { data?: { error?: string } } };
       setError(axErr?.response?.data?.error || "Planning failed");
     } finally {
       setPlanning(false);
+    }
+  };
+
+  // Toggle chain_frames on the active (pre-generate) project
+  const handleToggleChainFrames = async (next: boolean) => {
+    if (!activeProject) {
+      setChainFrames(next);
+      return;
+    }
+    setChainFrames(next);
+    try {
+      await api.put(`/api/video/storyboard/${activeProject.id}`, { chain_frames: next });
+      const { data } = await api.get(`/api/video/storyboard/${activeProject.id}`);
+      setActiveProject(data);
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      setError(axErr?.response?.data?.error || "Update failed");
     }
   };
 
@@ -163,10 +191,13 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
     }
   };
 
-  // Update scene prompt
-  const handleUpdateScene = async (sceneId: number, prompt: string) => {
+  // Update scene fields (prompt / duration / reference_asset_id / camera_style)
+  const handleUpdateScene = async (
+    sceneId: number,
+    patch: { prompt?: string; duration?: number; reference_asset_id?: number | null; camera_style?: string | null },
+  ) => {
     if (!activeProject) return;
-    await api.put(`/api/video/storyboard/${activeProject.id}/update-scene`, { scene_id: sceneId, prompt });
+    await api.put(`/api/video/storyboard/${activeProject.id}/update-scene`, { scene_id: sceneId, ...patch });
     const { data } = await api.get(`/api/video/storyboard/${activeProject.id}`);
     setActiveProject(data);
   };
@@ -436,13 +467,45 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                   <input type="checkbox" checked={noTextOverlay} onChange={e => setNoTextOverlay(e.target.checked)} style={{ accentColor: "#6366F1" }} />
                   Remove text from video
                 </label>
+                <details style={{ marginTop: 8, fontSize: 11 }}>
+                  <summary style={{ cursor: "pointer", color: "var(--text-muted)", userSelect: "none", listStyle: "none", display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: 9, opacity: 0.7 }}>▸</span> Advanced
+                  </summary>
+                  <label
+                    title="EXPERIMENTAL. Uses each scene's final frame as a reference for the next scene. Forces strict sequential generation (much slower). In most cases the per-scene reference asset gives better character consistency. Leave OFF unless you're shooting a single-location continuous-action sequence."
+                    style={{ display: "flex", alignItems: "flex-start", gap: 6, marginTop: 8, fontSize: 11, color: "var(--text-secondary)", cursor: activeProject && !["ready","planning","failed"].includes(activeProject.status) ? "not-allowed" : "pointer", opacity: activeProject && !["ready","planning","failed"].includes(activeProject.status) ? 0.5 : 1, padding: "8px 10px", background: "#1a1410", border: "1px solid #3a2a1a", borderRadius: 4 }}>
+                    <input type="checkbox" checked={chainFrames}
+                      disabled={!!(activeProject && !["ready","planning","failed"].includes(activeProject.status))}
+                      onChange={e => handleToggleChainFrames(e.target.checked)} style={{ accentColor: "#F59E0B", marginTop: 2 }} />
+                    <span>
+                      <span style={{ color: "#F59E0B", fontWeight: 600 }}>⚠ Chain last frame → next scene</span>
+                      <span style={{ display: "block", opacity: 0.6, fontSize: 10, marginTop: 2 }}>
+                        Experimental. Slow (serial, no parallelism). Usually hurts character consistency vs. a per-scene reference asset. Useful only for single-location continuous-action shots.
+                      </span>
+                    </span>
+                  </label>
+                </details>
               </div>
               {style === "animation" && avatars.length > 0 && (
-                <div><span style={{ ...s.label, fontSize: 10 }}>Character</span>
+                <div>
+                  <span style={{ ...s.label, fontSize: 10 }}>
+                    Default reference asset
+                    <span style={{ marginLeft: 6, opacity: 0.55, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+                      (fallback for any scene without its own)
+                    </span>
+                  </span>
                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                     <button onClick={() => setSelectedAvatar(null)} style={{ padding: "4px 10px", borderRadius: 4, fontSize: 10, cursor: "pointer", border: selectedAvatar === null ? "2px solid #6366F1" : "1px solid var(--border)", background: selectedAvatar === null ? "#EDE9FE" : "var(--surface)", color: "var(--text-muted)" }}>None</button>
                     {avatars.map(av => (<button key={av.id} onClick={() => setSelectedAvatar(av.id)} title={av.name} style={{ padding: 2, borderRadius: 4, cursor: "pointer", width: 46, border: selectedAvatar === av.id ? "2px solid #6366F1" : "1px solid var(--border)" }}><img src={av.landscape_url || `/api/assets/avatar/file/${av.landscape_file}`} alt={av.name} style={{ width: "100%", height: 24, objectFit: "cover", borderRadius: 2 }} /></button>))}
                   </div>
+                  {activeProject && (
+                    <div style={{ marginTop: 6, padding: "6px 8px", borderRadius: 4, background: "#0a0a14", border: "1px solid #2a2a4a", fontSize: 10, color: "#888", lineHeight: 1.5 }}>
+                      <strong style={{ color: "#A5B4FC" }}>Per-scene precedence:</strong><br />
+                      1. Scene's own asset (set in scene detail)<br />
+                      {chainFrames && <>2. ⛓ Previous scene's last frame <span style={{ color: "#F59E0B" }}>(experimental)</span><br /></>}
+                      {chainFrames ? "3." : "2."} Default reference above
+                    </div>
+                  )}
                 </div>
               )}
               <button onClick={handlePlanStoryboard} disabled={planning || !script.trim()}
@@ -466,6 +529,13 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>Storyboard</span>
                     <span style={{ padding: "2px 10px", borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: "uppercase", background: activeProject.status === "completed" ? "#0D7C3D33" : activeProject.status === "failed" ? "#D3202933" : "#6366F133", color: activeProject.status === "completed" ? "#4ADE80" : activeProject.status === "failed" ? "#F87171" : "#A5B4FC" }}>{activeProject.status}</span>
+                    {!!activeProject.chain_frames && (
+                      <span title="Chained mode: each scene uses the previous scene's last frame as a reference. Generates sequentially."
+                        style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#A78BFA33", color: "#C4B5FD", display: "flex", alignItems: "center", gap: 3 }}>
+                        ⛓ Chained
+                      </span>
+                    )}
+                    <span style={{ fontSize: 10, color: "#888" }}>{activeProject.scenes.length} scenes</span>
                     {activeProject.status === "generating" && <span style={{ fontSize: 12, fontWeight: 600, color: "#A5B4FC" }}>{totalProgress}%</span>}
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
@@ -482,12 +552,34 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                 )}
               </div>
 
+              {/* Director Brief */}
+              {activeProject.director_brief && (
+                <div style={{ borderBottom: "1px solid #2a2a4a", background: "#13131f" }}>
+                  <button onClick={() => setBriefExpanded(v => !v)}
+                    style={{ width: "100%", padding: "10px 20px", border: "none", background: "transparent",
+                      color: "#A5B4FC", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between",
+                      fontSize: 12, fontWeight: 600 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 14 }}>🎬</span> Director's Brief
+                      <span style={{ fontSize: 10, color: "#666", fontWeight: 400 }}>· tone, arc, motifs</span>
+                    </span>
+                    <span style={{ fontSize: 10, color: "#888" }}>{briefExpanded ? "▾ collapse" : "▸ expand"}</span>
+                  </button>
+                  {briefExpanded && (
+                    <div style={{ padding: "0 20px 14px 20px", fontSize: 12, color: "#bbb", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                      {activeProject.director_brief}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Filmstrip */}
               <div style={{ padding: "16px 20px", overflowX: "auto" }}>
                 <div style={{ display: "flex", gap: 0, minWidth: "fit-content", alignItems: "stretch" }}>
                   {activeProject.scenes.map((scene, idx) => {
                     const isSelected = selectedSceneIdx === idx;
                     const statusColor = scene.status === "completed" ? "#4ADE80" : scene.status === "failed" ? "#F87171" : (scene.status !== "pending" && scene.status !== "") ? "#A5B4FC" : "#555";
+                    const refAsset = scene.reference_asset_id ? avatars.find(a => a.id === scene.reference_asset_id) : null;
                     return (
                       <div key={scene.id} style={{ display: "flex", alignItems: "center" }}>
                         <div onClick={() => setSelectedSceneIdx(isSelected ? null : idx)} style={{ width: 160, cursor: "pointer", borderRadius: 8, border: isSelected ? "2px solid #A5B4FC" : "2px solid transparent", background: isSelected ? "#2a2a4a" : "#1e1e30", overflow: "hidden", transition: "all 0.15s", flexShrink: 0 }}>
@@ -496,11 +588,35 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                               <video src={scene.video_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} onMouseEnter={e => (e.currentTarget as HTMLVideoElement).play()} onMouseLeave={e => { const v = e.currentTarget as HTMLVideoElement; v.pause(); v.currentTime = 0; }} muted loop />
                             ) : <span style={{ fontSize: 28, opacity: 0.3 }}>🎬</span>}
                             <div style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", background: statusColor }} />
+                            {/* Per-scene reference-asset badge */}
+                            {refAsset && (
+                              <div title={`Reference: ${refAsset.name}`}
+                                style={{ position: "absolute", bottom: 4, left: 4, width: 22, height: 22, borderRadius: 4, overflow: "hidden", border: "1.5px solid #A78BFA", boxShadow: "0 1px 4px rgba(0,0,0,0.6)" }}>
+                                <img src={refAsset.landscape_url || `/api/assets/avatar/file/${refAsset.landscape_file}`} alt={refAsset.name}
+                                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                              </div>
+                            )}
                             {scene.status !== "pending" && scene.status !== "completed" && scene.status !== "failed" && (
                               <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 3, background: "#333" }}>
                                 <div style={{ height: "100%", background: "#A5B4FC", width: `${Math.max(scene.progress || 5, 5)}%`, transition: "width 0.5s" }} />
                               </div>
                             )}
+                            {/* Waiting-in-queue badge for chain mode: scenes after a still-running predecessor */}
+                            {(() => {
+                              if (!activeProject.chain_frames) return null;
+                              if (scene.status !== "pending" && scene.status !== "") return null;
+                              if (activeProject.status !== "generating") return null;
+                              // Find the earliest scene that hasn't completed; if it's before us we're waiting
+                              const blocker = activeProject.scenes.find(sc => sc.scene_number < scene.scene_number && sc.status !== "completed");
+                              if (!blocker) return null;
+                              return (
+                                <div title={`Chain mode: waiting for scene ${blocker.scene_number} to finish`}
+                                  style={{ position: "absolute", inset: 0, background: "rgba(10,10,20,0.75)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 4, color: "#A78BFA", fontSize: 9, fontWeight: 600, textAlign: "center", padding: 4 }}>
+                                  <span style={{ fontSize: 18 }}>⏸</span>
+                                  <span>Waiting for scene {blocker.scene_number}</span>
+                                </div>
+                              );
+                            })()}
                             {/* Retry button on failed */}
                             {scene.status === "failed" && (
                               <button onClick={ev => { ev.stopPropagation(); handleRetryScene(scene.id); }}
@@ -521,7 +637,12 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
                             <div style={{ fontSize: 9, color: "#666", marginTop: 2 }}>{scene.duration}s</div>
                           </div>
                         </div>
-                        {idx < activeProject.scenes.length - 1 && <div style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", color: "#444", fontSize: 14, flexShrink: 0 }}>→</div>}
+                        {idx < activeProject.scenes.length - 1 && (
+                          <div title={activeProject.chain_frames ? "Last frame chains into next scene" : ""}
+                            style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", color: activeProject.chain_frames ? "#A78BFA" : "#444", fontSize: 14, flexShrink: 0 }}>
+                            {activeProject.chain_frames ? "⛓" : "→"}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -530,7 +651,18 @@ export default function VideoPage({ onGenerated }: { onGenerated?: () => void })
 
               {/* Scene Detail */}
               {selectedSceneIdx !== null && activeProject.scenes[selectedSceneIdx] && (
-                <SceneDetailPanel scene={activeProject.scenes[selectedSceneIdx]} editable={activeProject.status === "ready" || activeProject.status === "planning"} onUpdatePrompt={(prompt) => handleUpdateScene(activeProject.scenes[selectedSceneIdx].id, prompt)} onRetry={() => handleRetryScene(activeProject.scenes[selectedSceneIdx].id)} onRemix={(prompt) => handleRemixScene(activeProject.scenes[selectedSceneIdx].id, prompt)} />
+                <SceneDetailPanel
+                  scene={activeProject.scenes[selectedSceneIdx]}
+                  sceneIndex={selectedSceneIdx}
+                  totalScenes={activeProject.scenes.length}
+                  chainFrames={!!activeProject.chain_frames}
+                  projectAvatarId={selectedAvatar}
+                  editable={activeProject.status === "ready" || activeProject.status === "planning"}
+                  avatars={avatars}
+                  onUpdate={(patch) => handleUpdateScene(activeProject.scenes[selectedSceneIdx].id, patch)}
+                  onRetry={() => handleRetryScene(activeProject.scenes[selectedSceneIdx].id)}
+                  onRemix={(prompt) => handleRemixScene(activeProject.scenes[selectedSceneIdx].id, prompt)}
+                />
               )}
 
               {/* Final Video */}
@@ -657,8 +789,19 @@ function JobCard({ job }: { job: VideoJob }) {
 }
 
 
-function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry, onRemix }: {
-  scene: VideoScene; editable: boolean; onUpdatePrompt: (prompt: string) => void; onRetry?: () => void; onRemix?: (prompt: string) => void;
+type SceneAvatar = { id: number; name: string; landscape_file: string; landscape_url?: string };
+
+function SceneDetailPanel({ scene, sceneIndex, totalScenes, chainFrames, projectAvatarId, editable, avatars, onUpdate, onRetry, onRemix }: {
+  scene: VideoScene;
+  sceneIndex: number;
+  totalScenes: number;
+  chainFrames: boolean;
+  projectAvatarId: number | null;
+  editable: boolean;
+  avatars: SceneAvatar[];
+  onUpdate: (patch: { prompt?: string; duration?: number; reference_asset_id?: number | null; camera_style?: string | null }) => void;
+  onRetry?: () => void;
+  onRemix?: (prompt: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [remixing, setRemixing] = useState(false);
@@ -669,16 +812,74 @@ function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry, onRemix }:
 
   const isCompleted = scene.status === "completed";
   const canRemix = isCompleted && onRemix;
+  const refAsset = scene.reference_asset_id ? avatars.find(a => a.id === scene.reference_asset_id) : null;
+  const projectAsset = projectAvatarId ? avatars.find(a => a.id === projectAvatarId) : null;
+
+  // Compute the EFFECTIVE reference this scene will get at generation time
+  let effectiveLabel: string;
+  let effectiveColor: string;
+  let effectiveIcon: string;
+  if (refAsset) {
+    effectiveLabel = `This scene's asset: ${refAsset.name}`;
+    effectiveColor = "#A78BFA";
+    effectiveIcon = "📌";
+  } else if (chainFrames && sceneIndex > 0) {
+    effectiveLabel = `Previous scene's last frame (chained)`;
+    effectiveColor = "#C4B5FD";
+    effectiveIcon = "⛓";
+  } else if (projectAsset) {
+    effectiveLabel = `Default reference: ${projectAsset.name}`;
+    effectiveColor = "#A5B4FC";
+    effectiveIcon = "🎭";
+  } else {
+    effectiveLabel = chainFrames && sceneIndex === 0
+      ? "None (first scene seeds the chain)"
+      : "None — Sora will generate freely";
+    effectiveColor = "#666";
+    effectiveIcon = "—";
+  }
 
   return (
     <div style={{ padding: "16px 20px", borderTop: "1px solid #2a2a4a", background: "#12121f" }}>
+      {/* Effective-reference status banner */}
+      <div style={{ marginBottom: 12, padding: "6px 10px", borderRadius: 6, background: "#0a0a14", border: `1px solid ${effectiveColor}33`, fontSize: 11, color: effectiveColor, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 13 }}>{effectiveIcon}</span>
+        <span><strong>Reference for scene {scene.scene_number}:</strong> {effectiveLabel}</span>
+        <span style={{ marginLeft: "auto", opacity: 0.5, fontSize: 10 }}>scene {sceneIndex + 1} of {totalScenes}</span>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: isCompleted && scene.video_url ? "1fr 1fr" : "1fr", gap: 16 }}>
-        {/* Left: Prompt */}
+        {/* Left: Prompt + Controls */}
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#A5B4FC" }}>Scene {scene.scene_number} — {scene.description}</span>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 10, color: "#666" }}>{scene.duration}s</span>
+              {editable ? (
+                <select value={scene.duration} onChange={e => onUpdate({ duration: Number(e.target.value) })}
+                  title="Scene duration (seconds)"
+                  style={{ padding: "3px 6px", fontSize: 10, borderRadius: 4, border: "1px solid #444", background: "#1a1a2e", color: "#A5B4FC", cursor: "pointer" }}>
+                  {SCENE_DURATIONS.map(d => <option key={d} value={d}>{d}s</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize: 10, color: "#666" }}>{scene.duration}s</span>
+              )}
+              {editable ? (
+                <select
+                  value={scene.camera_style ?? ""}
+                  onChange={e => onUpdate({ camera_style: e.target.value || null })}
+                  title="Camera movement for this scene (overrides project default)"
+                  style={{ padding: "3px 6px", fontSize: 10, borderRadius: 4, border: "1px solid #444", background: "#1a1a2e", color: scene.camera_style ? "#F59E0B" : "#A5B4FC", cursor: "pointer" }}
+                >
+                  <option value="">Default camera</option>
+                  <option value="static">Static</option>
+                  <option value="slow-pan">Slow Pan</option>
+                  <option value="dolly">Dolly</option>
+                  <option value="orbit">Orbit</option>
+                  <option value="handheld">Handheld</option>
+                </select>
+              ) : scene.camera_style ? (
+                <span style={{ fontSize: 10, color: "#F59E0B" }} title="Per-scene camera override">🎥 {scene.camera_style}</span>
+              ) : null}
               {editable && !editing && !remixing && (
                 <button onClick={() => setEditing(true)}
                   style={{ padding: "3px 10px", fontSize: 10, borderRadius: 4, border: "1px solid #444",
@@ -694,13 +895,41 @@ function SceneDetailPanel({ scene, editable, onUpdatePrompt, onRetry, onRemix }:
               )}
             </div>
           </div>
+
+          {/* Per-scene reference-asset picker (only editable before generation) */}
+          {editable && avatars.length > 0 && (
+            <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 6, background: "#1a1a2e", border: "1px solid #2a2a4a" }}>
+              <div style={{ fontSize: 10, color: "#888", marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Reference asset for this scene <span style={{ opacity: 0.6 }}>(overrides project default)</span></span>
+                {refAsset && <span style={{ color: "#A78BFA" }}>Using: {refAsset.name}</span>}
+              </div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                <button onClick={() => onUpdate({ reference_asset_id: null })}
+                  style={{ padding: "4px 10px", borderRadius: 4, fontSize: 10, cursor: "pointer",
+                    border: !scene.reference_asset_id ? "2px solid #A78BFA" : "1px solid #333",
+                    background: !scene.reference_asset_id ? "#2a1f4a" : "transparent",
+                    color: !scene.reference_asset_id ? "#C4B5FD" : "#888" }}>None</button>
+                {avatars.map(av => (
+                  <button key={av.id} onClick={() => onUpdate({ reference_asset_id: av.id })}
+                    title={av.name}
+                    style={{ padding: 2, borderRadius: 4, cursor: "pointer", width: 46,
+                      border: scene.reference_asset_id === av.id ? "2px solid #A78BFA" : "1px solid #333",
+                      background: "transparent" }}>
+                    <img src={av.landscape_url || `/api/assets/avatar/file/${av.landscape_file}`} alt={av.name}
+                      style={{ width: "100%", height: 24, objectFit: "cover", borderRadius: 2 }} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {editing ? (
             <div>
               <textarea value={editPrompt} onChange={e => setEditPrompt(e.target.value)} rows={5}
                 style={{ width: "100%", padding: 10, borderRadius: 6, border: "1px solid #444", background: "#1a1a2e",
                   color: "#ccc", fontSize: 12, resize: "vertical", fontFamily: "'Cascadia Code', monospace", lineHeight: 1.6 }} />
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <button onClick={() => { onUpdatePrompt(editPrompt); setEditing(false); }}
+                <button onClick={() => { onUpdate({ prompt: editPrompt }); setEditing(false); }}
                   style={{ padding: "6px 16px", fontSize: 11, borderRadius: 4, border: "none", background: "#6366F1", color: "#fff", cursor: "pointer" }}>Save</button>
                 <button onClick={() => { setEditPrompt(scene.prompt); setEditing(false); }}
                   style={{ padding: "6px 16px", fontSize: 11, borderRadius: 4, border: "1px solid #444", background: "transparent", color: "#888", cursor: "pointer" }}>Cancel</button>

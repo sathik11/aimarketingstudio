@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS video_projects (
     total_scenes INTEGER DEFAULT 0,
     completed_scenes INTEGER DEFAULT 0,
     final_video_file TEXT,
+    director_brief TEXT,
+    chain_frames INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -93,10 +95,14 @@ CREATE TABLE IF NOT EXISTS video_scenes (
     status TEXT NOT NULL DEFAULT 'pending',
     progress INTEGER DEFAULT 0,
     video_file TEXT,
+    reference_asset_id INTEGER,
+    previous_frame_file TEXT,
+    camera_style TEXT,
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES video_projects(id) ON DELETE CASCADE
+    FOREIGN KEY (project_id) REFERENCES video_projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (reference_asset_id) REFERENCES avatars(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS avatars (
@@ -154,6 +160,34 @@ def _migrate_db(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE avatars ADD COLUMN error_message TEXT")
         conn.commit()
         logger.info("Migrated avatars table: added status/quality/error_message columns")
+
+    # video_projects: director brief + frame chaining toggle
+    cursor = conn.execute("PRAGMA table_info(video_projects)")
+    project_cols = {row[1] for row in cursor.fetchall()}
+    if "director_brief" not in project_cols:
+        conn.execute("ALTER TABLE video_projects ADD COLUMN director_brief TEXT")
+        conn.commit()
+        logger.info("Migrated video_projects table: added director_brief column")
+    if "chain_frames" not in project_cols:
+        conn.execute("ALTER TABLE video_projects ADD COLUMN chain_frames INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+        logger.info("Migrated video_projects table: added chain_frames column")
+
+    # video_scenes: per-scene asset + chained previous frame
+    cursor = conn.execute("PRAGMA table_info(video_scenes)")
+    scene_cols = {row[1] for row in cursor.fetchall()}
+    if "reference_asset_id" not in scene_cols:
+        conn.execute("ALTER TABLE video_scenes ADD COLUMN reference_asset_id INTEGER")
+        conn.commit()
+        logger.info("Migrated video_scenes table: added reference_asset_id column")
+    if "previous_frame_file" not in scene_cols:
+        conn.execute("ALTER TABLE video_scenes ADD COLUMN previous_frame_file TEXT")
+        conn.commit()
+        logger.info("Migrated video_scenes table: added previous_frame_file column")
+    if "camera_style" not in scene_cols:
+        conn.execute("ALTER TABLE video_scenes ADD COLUMN camera_style TEXT")
+        conn.commit()
+        logger.info("Migrated video_scenes table: added camera_style column")
 
 
 def init_db():
@@ -455,12 +489,19 @@ def get_user_video_jobs(user_id: int) -> list[dict]:
 
 # --- Video Projects (Storyboard) ---
 
-def create_video_project(user_id: int, script: str, style: str, resolution: str) -> dict:
+def create_video_project(
+    user_id: int,
+    script: str,
+    style: str,
+    resolution: str,
+    director_brief: str | None = None,
+    chain_frames: bool = False,
+) -> dict:
     now = _now()
     conn = _get_conn()
     cursor = conn.execute(
-        "INSERT INTO video_projects (user_id, status, script, style, resolution, created_at, updated_at) VALUES (?, 'planning', ?, ?, ?, ?, ?)",
-        (user_id, script, style, resolution, now, now),
+        "INSERT INTO video_projects (user_id, status, script, style, resolution, director_brief, chain_frames, created_at, updated_at) VALUES (?, 'planning', ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, script, style, resolution, director_brief, 1 if chain_frames else 0, now, now),
     )
     conn.commit()
     pid = cursor.lastrowid
@@ -473,9 +514,11 @@ def add_project_scenes(project_id: int, scenes: list[dict]) -> list[dict]:
     conn = _get_conn()
     result = []
     for s in scenes:
+        ref_asset = s.get("reference_asset_id")
+        camera_style = s.get("camera_style")
         cursor = conn.execute(
-            "INSERT INTO video_scenes (project_id, scene_number, description, prompt, duration, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (project_id, s["scene_number"], s.get("description", ""), s.get("prompt", ""), s.get("duration", 12), now, now),
+            "INSERT INTO video_scenes (project_id, scene_number, description, prompt, duration, reference_asset_id, camera_style, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (project_id, s["scene_number"], s.get("description", ""), s.get("prompt", ""), s.get("duration", 12), ref_asset, camera_style, now, now),
         )
         result.append({"id": cursor.lastrowid, "scene_number": s["scene_number"]})
     conn.execute("UPDATE video_projects SET total_scenes = ?, status = 'ready', updated_at = ? WHERE id = ?",
