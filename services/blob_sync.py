@@ -34,14 +34,20 @@ BLOB_DB_NAME = "appdata/tts.db"
 BLOB_AUDIO_PREFIX = "appdata/audio/"
 BLOB_VIDEO_PREFIX = "appdata/video/"
 BLOB_AVATAR_PREFIX = "appdata/avatars/"
+BLOB_DB_BACKUP_PREFIX = "appdata/backups/"
 
 AUDIO_MAX_PER_SCRIPT = 20  # Keep last N audio files per script in blob
+DB_BACKUP_KEEP = 14  # Keep last N timestamped DB snapshots
 
 _credential = None
 _lock = threading.Lock()
 _last_sync = 0
 _SYNC_DEBOUNCE_SECS = 5
 _blob_auth_failed = False
+# When True, refuse to upload the DB. Set when a backup exists in blob but we
+# could not restore it (e.g. network/firewall/auth). This prevents a freshly
+# seeded local DB from overwriting a good backup and causing data loss.
+_db_sync_blocked = False
 
 
 def _is_blob_auth_error(err: Exception) -> bool:
@@ -92,30 +98,53 @@ def _get_container_client():
 # ── DB sync ──────────────────────────────────────────────────────────
 
 def download_db_from_blob():
+    global _db_sync_blocked
     container = _get_container_client()
     if not container:
         logger.info("Blob sync disabled: no storage config")
         return False
+    blob_client = container.get_blob_client(BLOB_DB_NAME)
+
+    # Determine whether a backup exists before attempting a download. If we
+    # cannot even tell (network/firewall/auth), assume one MIGHT exist and
+    # block uploads so we never clobber it with a fresh seed DB.
     try:
-        blob_client = container.get_blob_client(BLOB_DB_NAME)
+        backup_exists = blob_client.exists()
+    except Exception as e:
+        _db_sync_blocked = True
+        _handle_blob_error("check DB existence", e)
+        logger.warning(
+            "Could not verify DB backup existence (%s); blocking DB upload "
+            "for this process to protect any existing backup.", e,
+        )
+        return False
+
+    if not backup_exists:
+        logger.info("No DB found in blob storage, starting fresh")
+        return False
+
+    try:
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(DB_PATH, "wb") as f:
             stream = blob_client.download_blob()
             stream.readinto(f)
         logger.info(f"Downloaded DB from blob ({BLOB_DB_NAME})")
         return True
-    except ResourceNotFoundError:
-        logger.info("No DB found in blob storage, starting fresh")
-        return False
     except Exception as e:
-        if _handle_blob_error("download DB", e):
-            return False
-        logger.warning(f"Failed to download DB from blob: {e}")
+        # A backup exists but we failed to restore it. Do NOT overwrite it.
+        _db_sync_blocked = True
+        _handle_blob_error("download DB", e)
+        logger.warning(
+            "DB backup exists but download failed (%s); blocking DB upload "
+            "for this process to protect the backup.", e,
+        )
         return False
 
 
 def upload_db_to_blob():
     global _last_sync
+    if _db_sync_blocked:
+        return
     now = time.time()
     if now - _last_sync < _SYNC_DEBOUNCE_SECS:
         return
@@ -144,6 +173,9 @@ def upload_db_to_blob():
 
 def force_upload_db_to_blob():
     """Synchronous, non-debounced DB upload — called on shutdown."""
+    if _db_sync_blocked:
+        logger.info("Skipping shutdown DB sync: uploads blocked to protect backup")
+        return
     container = _get_container_client()
     if not container:
         return
@@ -399,7 +431,56 @@ def _download_all_avatars_from_blob():
         logger.warning(f"Failed to download avatars from blob: {e}")
 
 
+def snapshot_db_backup():
+    """Copy the current DB backup blob to a timestamped snapshot and prune old
+    ones. Best-effort, runs in the background. Called on startup after a
+    successful restore so we always capture a known-good point-in-time copy."""
+    if _db_sync_blocked:
+        return
+    container = _get_container_client()
+    if not container:
+        return
+
+    def _do():
+        try:
+            src = container.get_blob_client(BLOB_DB_NAME)
+            if not src.exists():
+                return
+            data = src.download_blob().readall()
+            ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            dst_name = f"{BLOB_DB_BACKUP_PREFIX}tts-{ts}.db"
+            container.get_blob_client(dst_name).upload_blob(data, overwrite=True)
+            logger.info(f"Created DB backup snapshot {dst_name}")
+            _prune_db_backups(container)
+        except Exception as e:
+            if _handle_blob_error("snapshot DB", e):
+                return
+            logger.warning(f"Failed to snapshot DB backup: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _prune_db_backups(container, keep: int = DB_BACKUP_KEEP):
+    """Keep only the most recent `keep` timestamped DB snapshots."""
+    try:
+        # Timestamp format sorts lexicographically == chronologically.
+        names = sorted(
+            b.name for b in container.list_blobs(name_starts_with=BLOB_DB_BACKUP_PREFIX)
+        )
+        for name in names[:-keep] if len(names) > keep else []:
+            try:
+                container.get_blob_client(name).delete_blob()
+                logger.debug(f"Pruned old DB snapshot {name}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def restore_from_blob():
     """Startup restore: DB + avatars. Audio and video are on-demand."""
-    download_db_from_blob()
+    restored = download_db_from_blob()
+    if restored:
+        # Capture a known-good snapshot of the backup before this process writes.
+        snapshot_db_backup()
     _download_all_avatars_from_blob()
