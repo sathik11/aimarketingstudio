@@ -44,6 +44,8 @@ AZURE_AD_API_SCOPE = os.getenv("AZURE_AD_API_SCOPE", "")
 # --- Curated Voice Lists ---
 VOICES = {
     "azure-tts": [
+        {"id": "fil-PH-Blessica:DragonHDLatestNeural", "name": "Blessica DragonHD (Filipino Female, Preview)", "locale": "fil-PH", "gender": "Female"},
+        {"id": "fil-PH-Angelo:DragonHDLatestNeural", "name": "Angelo DragonHD (Filipino Male, Preview)", "locale": "fil-PH", "gender": "Male"},
         {"id": "fil-PH-AngeloNeural", "name": "Angelo (Filipino Male)", "locale": "fil-PH", "gender": "Male"},
         {"id": "fil-PH-BlessicaNeural", "name": "Blessica (Filipino Female)", "locale": "fil-PH", "gender": "Female"},
         {"id": "en-US-Andrew:DragonHDLatestNeural", "name": "Andrew HD (English Male)", "locale": "en-US", "gender": "Male"},
@@ -51,6 +53,8 @@ VOICES = {
         {"id": "en-US-AvaMultilingualNeural", "name": "Ava Multilingual (English Female)", "locale": "en-US", "gender": "Female"},
     ],
     "gpt-ssml": [
+        {"id": "fil-PH-Blessica:DragonHDLatestNeural", "name": "Blessica DragonHD (Filipino Female, Preview)", "locale": "fil-PH", "gender": "Female"},
+        {"id": "fil-PH-Angelo:DragonHDLatestNeural", "name": "Angelo DragonHD (Filipino Male, Preview)", "locale": "fil-PH", "gender": "Male"},
         {"id": "fil-PH-AngeloNeural", "name": "Angelo (Filipino Male)", "locale": "fil-PH", "gender": "Male"},
         {"id": "fil-PH-BlessicaNeural", "name": "Blessica (Filipino Female)", "locale": "fil-PH", "gender": "Female"},
         {"id": "en-US-Andrew:DragonHDLatestNeural", "name": "Andrew HD (English Male)", "locale": "en-US", "gender": "Male"},

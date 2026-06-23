@@ -44,6 +44,8 @@ function prettyFormatSsml(raw: string): string {
 /* ------------------------------------------------------------------ */
 
 const VOICES = [
+  { id: "fil-PH-Blessica:DragonHDLatestNeural", label: "Blessica DragonHD (fil-PH, Female, Preview)", lang: "fil-PH" },
+  { id: "fil-PH-Angelo:DragonHDLatestNeural", label: "Angelo DragonHD (fil-PH, Male, Preview)", lang: "fil-PH" },
   { id: "fil-PH-AngeloNeural", label: "Angelo (fil-PH, Male)", lang: "fil-PH" },
   { id: "fil-PH-BlessicaNeural", label: "Blessica (fil-PH, Female)", lang: "fil-PH" },
   { id: "en-US-Andrew:DragonHDLatestNeural", label: "Andrew DragonHD (en-US, Male)", lang: "en-US" },
